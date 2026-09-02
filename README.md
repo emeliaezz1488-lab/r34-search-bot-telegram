@@ -39,9 +39,6 @@
 ## 🛠️ Установка и запуск
 
 1. Перейди в папку бота:
-   ```bash
-   cd C:\Users\malad\Desktop\plugin\nsfw_telegram_bot
-   ```
 
 2. Открой файл `.env` и укажи токен своего бота от [@BotFather](https://t.me/BotFather):
    ```env
