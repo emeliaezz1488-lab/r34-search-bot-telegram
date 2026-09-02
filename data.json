@@ -1,0 +1,13 @@
+{
+  "pixiv_refresh_token": "",
+  "chats_settings": {},
+  "blacklist": [],
+  "known_chats": {
+    "-1004454862784": {
+      "id": -1004454862784,
+      "title": "крутое кф",
+      "type": "supergroup",
+      "last_active": 1788370111
+    }
+  }
+}
