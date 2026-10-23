@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files and secrets
+.env
+token.txt
+
+# Databases and data dumps
+bot_database.db
+bot_database.db-wal
+bot_database.db-shm
+data.json
+dump.sql
+*.db
+*.sqlite3
+
+# Logs and runtime files
+*.log
+*.tmp
+photo_conv*.mp4
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Operating system files
+.DS_Store
+Thumbs.db

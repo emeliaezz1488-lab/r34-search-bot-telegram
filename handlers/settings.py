@@ -11,7 +11,18 @@ router = Router(name="settings")
 DELAY_OPTIONS = [15, 30, 60, 120, 300]
 COUNT_OPTIONS = [1, 2, 3, 5, 10]
 MANGA_PAGES_OPTIONS = [20, 40, 60, 80, 100]
-SOURCE_OPTIONS = ["rule34", "danbooru", "pixiv"]
+SOURCE_OPTIONS = ["rule34", "danbooru", "pixiv", "konachan"]
+MEDIA_TYPE_OPTIONS = ["all", "photo", "video"]
+MEDIA_TYPE_LABELS = {
+    "all": "Все (фото и видео)",
+    "photo": "Только фото (JPG)",
+    "video": "Только видео"
+}
+MEDIA_TYPE_BUTTON_LABELS = {
+    "all": "Все",
+    "photo": "Фото (JPG)",
+    "video": "Видео"
+}
 
 def get_settings_markup(chat_id: int) -> InlineKeyboardMarkup:
     triggers = db.get_chat_setting(chat_id, "triggers_enabled", True)
@@ -23,6 +34,8 @@ def get_settings_markup(chat_id: int) -> InlineKeyboardMarkup:
     antiai = db.get_chat_setting(chat_id, "antiai", True)
     send_count = db.get_chat_setting(chat_id, "send_count", 1)
     manga_pages = db.get_chat_setting(chat_id, "pixiv_manga_max_pages", 40)
+    media_filter = db.get_chat_setting(chat_id, "media_filter", "all")
+    btn_media = MEDIA_TYPE_BUTTON_LABELS.get(media_filter, "Все")
 
     kb = [
         [
@@ -69,6 +82,10 @@ def get_settings_markup(chat_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text=f"📖 Манга макс: {manga_pages} стр",
                 callback_data="set:manga"
+            ),
+            InlineKeyboardButton(
+                text=f"🖼 Медиа: {btn_media}",
+                callback_data="set:mediatype"
             )
         ],
         [
@@ -90,6 +107,8 @@ def get_settings_text(chat_id: int) -> str:
     antiai = db.get_chat_setting(chat_id, "antiai", True)
     send_count = db.get_chat_setting(chat_id, "send_count", 1)
     manga_pages = db.get_chat_setting(chat_id, "pixiv_manga_max_pages", 40)
+    media_filter = db.get_chat_setting(chat_id, "media_filter", "all")
+    media_desc = MEDIA_TYPE_LABELS.get(media_filter, "Все")
 
     return (
         "⚙️ <b>Панель настроек чата</b>\n\n"
@@ -102,15 +121,27 @@ def get_settings_text(chat_id: int) -> str:
         f"• <b>Фильтр AI-артов:</b> {'✅ Отсеивать AI' if antiai else '❌ Разрешать'}\n"
         f"• <b>Постов за команду:</b> <code>{send_count}</code> шт.\n"
         f"• <b>Макс. страниц манги:</b> <code>{manga_pages}</code> стр.\n"
+        f"• <b>Фильтр формата медиа:</b> <code>{media_desc}</code>\n"
     )
 
-@router.message(Command("settings"))
-async def cmd_settings(message: types.Message):
+from utils.filters import FlexibleCommand
+
+@router.message(FlexibleCommand("settings"))
+async def cmd_settings(message: types.Message, cmd_name: str = "", cmd_args: str = ""):
     user_id = message.from_user.id if message.from_user else 0
-    if db.is_blacklisted(user_id) or db.is_blacklisted(message.chat.id):
+    chat_id = message.chat.id
+    logger.info(f"▶️ [CMD:/settings] User: {user_id} | Chat: {chat_id}")
+
+    if db.is_blacklisted(user_id) or db.is_blacklisted(chat_id):
+        logger.warning(f"⛔ Блеклист: отказ /settings для user {user_id} в {chat_id}")
         return
 
-    chat_id = message.chat.id
+    db.record_chat(
+        chat_id,
+        message.chat.title or message.chat.full_name or "Личка",
+        str(message.chat.type)
+    )
+
     await message.reply(
         get_settings_text(chat_id),
         reply_markup=get_settings_markup(chat_id),
@@ -186,6 +217,13 @@ async def process_setting_callback(callback: types.CallbackQuery):
         new_pages = MANGA_PAGES_OPTIONS[(idx + 1) % len(MANGA_PAGES_OPTIONS)]
         db.set_chat_setting(chat_id, "pixiv_manga_max_pages", new_pages)
         await callback.answer(f"Макс. страниц манги: {new_pages}")
+
+    elif action == "mediatype":
+        cur = db.get_chat_setting(chat_id, "media_filter", "all").lower()
+        idx = MEDIA_TYPE_OPTIONS.index(cur) if cur in MEDIA_TYPE_OPTIONS else 0
+        new_type = MEDIA_TYPE_OPTIONS[(idx + 1) % len(MEDIA_TYPE_OPTIONS)]
+        db.set_chat_setting(chat_id, "media_filter", new_type)
+        await callback.answer(f"Тип медиа: {MEDIA_TYPE_BUTTON_LABELS.get(new_type, new_type)}")
 
     try:
         await callback.message.edit_text(

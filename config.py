@@ -19,13 +19,29 @@ if token_txt_path.exists():
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 PIXIV_REFRESH_TOKEN = os.getenv("PIXIV_REFRESH_TOKEN", default_pixiv_token).strip()
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6869409295"))
 
-# Статические API данные
-R34_API_KEY = "d82f6db279ce94313e629e791533d456a4309dfeb528ddab6eee4b7472156f0def07ebfd3e64b9dddbf0d3b78f227ba8a5f386533ef1ccb1377d8a97481811dc"
-R34_USER_ID = "5255009"
-DANBOORU_USER = "DubstepNamaz"
-DANBOORU_API_KEY = "5qAAyDRZ22DFp8thwVXqGrfk"
+# Admin IDs configuration (comma-separated IDs in .env or defaults)
+ADMIN_IDS = {6869409295, 6523714964}
+env_admins = os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", ""))
+if env_admins:
+    for aid in env_admins.replace(";", ",").split(","):
+        clean_aid = aid.strip()
+        if clean_aid.isdigit():
+            ADMIN_IDS.add(int(clean_aid))
+
+ADMIN_ID = 6869409295
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+# API authentication credentials (can be overridden in .env)
+R34_API_KEY = os.getenv(
+    "R34_API_KEY",
+    "d82f6db279ce94313e629e791533d456a4309dfeb528ddab6eee4b7472156f0def07ebfd3e64b9dddbf0d3b78f227ba8a5f386533ef1ccb1377d8a97481811dc"
+).strip()
+R34_USER_ID = os.getenv("R34_USER_ID", "5255009").strip()
+DANBOORU_USER = os.getenv("DANBOORU_USER", "DubstepNamaz").strip()
+DANBOORU_API_KEY = os.getenv("DANBOORU_API_KEY", "5qAAyDRZ22DFp8thwVXqGrfk").strip()
 PIXIV_REFERER = "https://www.pixiv.net/"
 
 POSTS_COUNT = int(os.getenv("POSTS_COUNT", "100"))
@@ -58,6 +74,10 @@ def get_send_count(chat_id: int = 0) -> int:
 def get_pixiv_manga_max_pages(chat_id: int = 0) -> int:
     return int(db.get_chat_setting(chat_id, "pixiv_manga_max_pages", 40))
 
+def get_media_filter(chat_id: int = 0) -> str:
+    """Тип медиа для чата: 'all' (все), 'photo' (только JPG/PNG), 'video' (только видео/GIF)."""
+    return str(db.get_chat_setting(chat_id, "media_filter", "all")).lower()
+
 # Список User-Agent для ротации
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -71,12 +91,10 @@ def get_random_user_agent() -> str:
 
 def get_request_headers(rotate_ua: bool = True) -> dict:
     headers = {
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "DNT": "1",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
     }
     if rotate_ua:
         headers["User-Agent"] = get_random_user_agent()

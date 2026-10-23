@@ -3,6 +3,7 @@ import aiohttp
 from typing import List, Dict
 import config
 from utils.recent import recent_tracker
+from utils.http_client import get_http_session
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +29,12 @@ class DanbooruService:
         auth = aiohttp.BasicAuth(config.DANBOORU_USER, config.DANBOORU_API_KEY)
 
         try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(self.url, params=params, headers=headers, auth=auth) as response:
-                    if response.status != 200:
-                        logger.error(f"[Danbooru] HTTP error {response.status}")
-                        return []
-                    data = await response.json()
+            session = await get_http_session()
+            async with session.get(self.url, params=params, headers=headers, auth=auth) as response:
+                if response.status != 200:
+                    logger.error(f"[Danbooru] HTTP error {response.status}")
+                    return []
+                data = await response.json()
         except Exception as e:
             logger.error(f"[Danbooru] Request failed: {e}")
             return []
@@ -50,8 +50,17 @@ class DanbooruService:
             if not post_id or recent_tracker.is_recent(tag_key, post_id):
                 continue
 
-            image_url = post.get('file_url') or post.get('large_file_url') or post.get('preview_file_url')
-            if not image_url:
+            file_url = post.get('file_url') or ""
+            large_file_url = post.get('large_file_url') or ""
+            file_ext = file_url.lower().split('?')[0].split('.')[-1]
+            is_video = file_ext in ['mp4', 'webm', 'zip']
+
+            if not is_video and large_file_url:
+                target_url = large_file_url
+            else:
+                target_url = file_url or large_file_url or post.get('preview_file_url')
+
+            if not target_url:
                 continue
 
             tag_string = post.get('tag_string', '')
@@ -59,7 +68,7 @@ class DanbooruService:
 
             posts.append({
                 "id": post_id,
-                "file_url": image_url,
+                "file_url": target_url,
                 "tags": tags_list,
                 "rating": post.get("rating", ""),
                 "source": "danbooru"

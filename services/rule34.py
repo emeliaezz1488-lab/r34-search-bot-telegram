@@ -1,10 +1,10 @@
 import random
 import logging
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import aiohttp
 import config
-from utils.recent import recent_tracker
+from utils.http_client import get_http_session
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +39,13 @@ class Rule34Service:
 
         return search_tags.strip()
 
-    async def search(self, tags: str, limit: int = 100, antiai: bool = True) -> List[Dict]:
-        search_tags = self._prepare_tags(tags, antiai=antiai)
-        random_page = random.randint(0, 10)
-
+    async def _fetch_page(self, search_tags: str, pid: int = 0, limit: int = 100) -> Tuple[List[Dict], int]:
         params = {
             'page': 'dapi',
             's': 'post',
             'q': 'index',
             'limit': min(limit, 1000),
-            'pid': random_page,
+            'pid': pid,
             'api_key': config.R34_API_KEY,
             'user_id': config.R34_USER_ID,
         }
@@ -58,29 +55,39 @@ class Rule34Service:
         headers = config.get_request_headers()
 
         try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(self.url, params=params, headers=headers) as response:
-                    if response.status != 200:
-                        logger.error(f"[Rule34] HTTP error: {response.status}")
-                        return []
-                    text = await response.text()
+            session = await get_http_session()
+            async with session.get(self.url, params=params, headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"[Rule34] HTTP error: {response.status}")
+                    return [], 0
+                text = await response.text()
         except Exception as e:
-            logger.error(f"[Rule34] Request failed: {e}")
-            return []
+            logger.error(f"[Rule34] Request failed on pid={pid}: {e}")
+            return [], 0
 
         try:
             root = ET.fromstring(text)
+            total_count = int(root.get("count", "0"))
             posts = []
-            tag_key = f"r34_{search_tags}" if search_tags else "r34_random"
 
             for post in root.findall("post"):
                 post_id = post.get("id", "")
-                if not post_id or recent_tracker.is_recent(tag_key, post_id):
+                if not post_id:
                     continue
 
-                image_url = post.get('file_url') or post.get('sample_url')
-                if not image_url:
+                raw_file_url = post.get('file_url') or ""
+                sample_url = post.get('sample_url') or ""
+
+                file_ext = raw_file_url.lower().split('?')[0].split('.')[-1]
+                is_video = file_ext in ['mp4', 'webm', 'gif', 'mov', 'avi', 'mkv']
+
+                # Для картинок берем sample_url (100-300 КБ вместо 10-30 МБ) для молниеносной отправки
+                if not is_video and sample_url:
+                    target_url = sample_url
+                else:
+                    target_url = raw_file_url or sample_url
+
+                if not target_url:
                     continue
 
                 tags_str = post.get('tags', '')
@@ -88,15 +95,29 @@ class Rule34Service:
 
                 posts.append({
                     "id": post_id,
-                    "file_url": image_url,
+                    "file_url": target_url,
                     "tags": tags_list,
                     "rating": post.get("rating", ""),
                     "source": "rule34"
                 })
 
-            return posts
+            return posts, total_count
         except Exception as e:
-            logger.error(f"[Rule34] XML parse error: {e}")
-            return []
+            logger.error(f"[Rule34] XML parse error on pid={pid}: {e}")
+            return [], 0
+
+    async def search(self, tags: str, limit: int = 100, antiai: bool = True) -> List[Dict]:
+        search_tags = self._prepare_tags(tags, antiai=antiai)
+
+        # Мгновенный запрос первой страницы (дает до 100 постов за один быстрый HTTP-запрос)
+        posts, total_count = await self._fetch_page(search_tags, pid=0, limit=limit)
+
+        # Если ничего не нашлось с anti-ai тегами, пробуем без них
+        if not posts and antiai:
+            logger.debug(f"[Rule34] Поиск по '{tags}' не дал результатов с anti-ai, пробуем без него...")
+            raw_tags = self._prepare_tags(tags, antiai=False)
+            posts, total_count = await self._fetch_page(raw_tags, pid=0, limit=limit)
+
+        return posts
 
 rule34_service = Rule34Service()

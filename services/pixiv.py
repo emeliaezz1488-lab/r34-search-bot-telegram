@@ -11,12 +11,29 @@ from utils.recent import recent_tracker
 
 logger = logging.getLogger(__name__)
 
+RU_TO_PIXIV_TAGS = {
+    "фембой": "femboy",
+    "фембои": "femboy",
+    "фута": "futanari",
+    "футанари": "futanari",
+    "тян": "1girl",
+    "девушка": "1girl",
+    "лоли": "loli",
+    "хентай": "R-18",
+    "милфа": "milf",
+    "юри": "yuri",
+    "яой": "yaoi",
+    "аниме": "anime",
+    "порно": "R-18",
+}
+
 class PixivService:
     def __init__(self):
         self._api = None
         self._token_cached = ""
         self._auth_at = 0.0
         self.access_ttl = 3000
+        self.last_error: str = ""
         self._lock = asyncio.Lock()
 
     def get_refresh_token(self) -> str:
@@ -34,6 +51,7 @@ class PixivService:
 
         token = self.get_refresh_token()
         if not token:
+            self.last_error = "refresh_token_missing"
             raise ValueError("pixiv_token_missing")
 
         now = time.time()
@@ -56,9 +74,11 @@ class PixivService:
             try:
                 self._api.auth(refresh_token=token)
                 last_error = None
+                self.last_error = ""
                 break
             except Exception as e:
                 last_error = e
+                self.last_error = str(e)
                 logger.warning(f"[Pixiv] Auth attempt {attempt + 1}/3 failed: {e}")
                 if attempt < 2:
                     time.sleep(2 * (attempt + 1))
@@ -135,7 +155,9 @@ class PixivService:
         max_pages: int = 2
     ) -> List[Dict]:
         api = self._ensure_api_sync()
-        word = tags.strip() if tags else ("うごイラ" if video_only else "1girl")
+        raw_words = tags.strip().split()
+        mapped_words = [RU_TO_PIXIV_TAGS.get(w.lower(), w) for w in raw_words]
+        word = " ".join(mapped_words).strip() if mapped_words else ("うごイラ" if video_only else "1girl")
 
         prefix = "pixiv_r18" if r18_only else ("pixiv_manga" if manga_only else "pixiv")
         tag_key = f"{prefix}_{word}" if word else f"{prefix}_random"
@@ -175,9 +197,7 @@ class PixivService:
                     continue
 
                 if manga_only:
-                    if illust_type != "manga":
-                        continue
-                    if int(getattr(illust, "page_count", 1) or 1) < 2:
+                    if illust_type != "manga" and int(getattr(illust, "page_count", 1) or 1) < 2:
                         continue
 
                 if video_only and illust_type != "ugoira":
@@ -193,6 +213,7 @@ class PixivService:
                 posts.append({
                     "id": post_id,
                     "file_url": file_url,
+                    "_recent_key": tag_key,
                     "tags": tags_list,
                     "rating": str(x_restrict),
                     "title": getattr(illust, "title", "") or "",
@@ -217,10 +238,12 @@ class PixivService:
         video_only: bool = False
     ) -> List[Dict]:
         if not self.get_refresh_token():
+            self.last_error = "refresh_token_missing"
             logger.warning("[Pixiv] refresh_token не установлен")
             return []
 
         def _run():
+            self.last_error = ""
             for attempt in range(3):
                 try:
                     return self._search_sync(
@@ -231,6 +254,7 @@ class PixivService:
                         video_only=video_only
                     )
                 except Exception as e:
+                    self.last_error = str(e)
                     logger.error(f"[Pixiv] Search attempt {attempt + 1} failed: {e}")
                     self._reset_api()
                     if attempt < 2:
@@ -243,19 +267,10 @@ class PixivService:
         return await asyncio.to_thread(_run)
 
     async def download_image(self, url: str) -> Optional[bytes]:
-        import aiohttp
-        headers = config.get_request_headers()
-        headers["Referer"] = config.PIXIV_REFERER
-        try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        if len(data) >= 128 and not data[:256].lower().startswith((b"<!doctype", b"<html")):
-                            return data
-        except Exception as e:
-            logger.error(f"[Pixiv] async download failed for {url}: {e}")
+        from utils.http_client import fast_download
+        data = await fast_download(url, referer=config.PIXIV_REFERER)
+        if data and len(data) >= 128 and not data[:256].lower().startswith((b"<!doctype", b"<html")):
+            return data
         return None
 
     def _get_manga_candidate_sync(self, tags: str, max_pages: int) -> Optional[Dict]:
@@ -266,10 +281,12 @@ class PixivService:
             manga_only=True,
             r18_only=True
         )
-        if not candidates:
-            return None
-
+        # Сначала отдаем предпочтение настоящей многостраничной манге (3+ страниц)
+        good = [c for c in candidates if c.get("page_count", 1) >= 3]
+        if good:
+            candidates = good
         random.shuffle(candidates)
+
         api = self._ensure_api_sync()
         tag_key = f"pixiv_manga_r18_{tags.strip()}" if tags.strip() else "pixiv_manga_r18_random"
 

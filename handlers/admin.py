@@ -1,5 +1,6 @@
 import logging
 import math
+from html import escape
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -14,7 +15,7 @@ router = Router(name="admin")
 PAGE_SIZE = 5
 
 def is_admin(user_id: int) -> bool:
-    return user_id == config.ADMIN_ID
+    return config.is_admin(user_id)
 
 def get_admin_main_markup() -> InlineKeyboardMarkup:
     bl_count = len(db.get_blacklist())
@@ -53,14 +54,19 @@ def get_admin_main_text() -> str:
         "Выбери нужный раздел ниже:"
     )
 
-@router.message(Command("admin"))
-async def cmd_admin(message: types.Message):
+from utils.filters import FlexibleCommand
+
+@router.message(FlexibleCommand("admin"))
+async def cmd_admin(message: types.Message, cmd_name: str = "", cmd_args: str = ""):
     user_id = message.from_user.id if message.from_user else 0
+    logger.info(f"🛡 [ADMIN] User: {user_id} | Args: '{cmd_args}'")
+
     if not is_admin(user_id):
+        logger.warning(f"⛔ Попытка несанкционированного доступа к /admin от ID: {user_id}")
         await message.reply("⛔ <b>Доступ запрещен!</b> Эта команда доступна только администратору.", parse_mode="HTML")
         return
 
-    raw_args = message.text.split(maxsplit=2)[1:] if len(message.text.split(maxsplit=2)) > 1 else []
+    raw_args = cmd_args.split(maxsplit=1) if cmd_args else []
     if raw_args:
         subcmd = raw_args[0].lower()
         if subcmd == "ban" and len(raw_args) > 1:
@@ -136,7 +142,7 @@ async def process_admin_callback(callback: types.CallbackQuery):
         kb = []
         for chat in page_chats:
             cid = chat["id"]
-            title = chat.get("title", f"Чат {cid}")
+            title = str(chat.get("title", f"Чат {cid}"))
             active_tasks = task_tracker.get_active_tasks_count(cid)
             status_badge = f" [🔥 Запросов: {active_tasks}]" if active_tasks > 0 else ""
             btn_text = f"💬 {title[:25]}{status_badge}"
@@ -197,9 +203,9 @@ async def process_admin_callback(callback: types.CallbackQuery):
         ]
 
         text = (
-            f"💬 <b>Управление чатом:</b> <code>{chat_info.get('title')}</code>\n\n"
+            f"💬 <b>Управление чатом:</b> <code>{escape(str(chat_info.get('title', '')))}</code>\n\n"
             f"• <b>ID:</b> <code>{chat_id}</code>\n"
-            f"• <b>Тип:</b> <code>{chat_info.get('type')}</code>\n"
+            f"• <b>Тип:</b> <code>{escape(str(chat_info.get('type', 'unknown')))}</code>\n"
             f"• <b>Активных запросов сейчас:</b> <code>{active_tasks}</code>\n"
             f"• <b>В блеклисте:</b> {'Да ⛔' if is_bl else 'Нет ✅'}\n"
         )
@@ -225,8 +231,8 @@ async def process_admin_callback(callback: types.CallbackQuery):
 
         await callback.answer(f"Отменено запросов: {cancelled}", show_alert=True)
         # Перезагружаем карточку чата
-        callback.data = f"adm:viewchat:{chat_id}:{from_page}"
-        await process_admin_callback(callback)
+        new_cb = callback.model_copy(update={"data": f"adm:viewchat:{chat_id}:{from_page}"})
+        await process_admin_callback(new_cb)
         return
 
     # Переключение блеклиста для чата
@@ -242,8 +248,8 @@ async def process_admin_callback(callback: types.CallbackQuery):
             task_tracker.cancel_chat_tasks(chat_id)
             await callback.answer("Чат добавлен в блеклист!", show_alert=True)
 
-        callback.data = f"adm:viewchat:{chat_id}:{from_page}"
-        await process_admin_callback(callback)
+        new_cb = callback.model_copy(update={"data": f"adm:viewchat:{chat_id}:{from_page}"})
+        await process_admin_callback(new_cb)
         return
 
     # Меню блеклиста
